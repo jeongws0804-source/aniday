@@ -47,7 +47,9 @@ const koreanTitleByAlias = new Map();
 try {
   const response = await fetch(`https://api.anissia.net/anime/schedule/${weekdayNumber}`);
   if (response.ok) {
-    const rows = await response.json();
+    const payload = await response.json();
+    const rows = Array.isArray(payload) ? payload : payload.data;
+    if (!Array.isArray(rows)) throw new Error("Unexpected Anissia response format");
     for (const row of rows) {
       if (!row.subject || !/[가-힣]/u.test(row.subject)) continue;
       for (const alias of [row.subject, row.originalSubject]) {
