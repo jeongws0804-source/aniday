@@ -1,4 +1,4 @@
-name: Daily anime notification
+name: Daily Laftel anime notification
 
 on:
   schedule:
@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Send today's AniList schedule to ntfy
+      - name: Send today's Laftel lineup to ntfy
         run: node scripts/daily-anime-alert.mjs
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
