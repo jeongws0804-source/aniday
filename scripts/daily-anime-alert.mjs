@@ -16,7 +16,7 @@ const query = `
       pageInfo { hasNextPage }
       airingSchedules(airingAt_greater: $from, airingAt_lesser: $to, sort: TIME) {
         id airingAt episode
-        media { title { english romaji native } siteUrl }
+        media { title { english romaji native } synonyms siteUrl }
       }
     }
   }
@@ -40,8 +40,31 @@ for (let page = 1; page <= 5; page += 1) {
 const formatter = new Intl.DateTimeFormat("ko-KR", {
   timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hour12: false,
 });
+const weekday = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Seoul", weekday: "short" }).format(new Date());
+const weekdayNumber = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[weekday];
+const normalizeTitle = (value) => value?.normalize("NFKC").toLocaleLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "") || "";
+const koreanTitleByAlias = new Map();
+try {
+  const response = await fetch(`https://api.anissia.net/anime/schedule/${weekdayNumber}`);
+  if (response.ok) {
+    const rows = await response.json();
+    for (const row of rows) {
+      if (!row.subject || !/[가-힣]/u.test(row.subject)) continue;
+      for (const alias of [row.subject, row.originalSubject]) {
+        const key = normalizeTitle(alias);
+        if (key) koreanTitleByAlias.set(key, row.subject);
+      }
+    }
+  }
+} catch (error) {
+  console.warn("Anissia Korean-title lookup unavailable:", error.message);
+}
+
 const lines = schedules.map((item) => {
-  const title = item.media.title.english || item.media.title.romaji || item.media.title.native || "제목 미상";
+  const aliases = [item.media.title.english, item.media.title.romaji, item.media.title.native, ...(item.media.synonyms || [])].filter(Boolean);
+  const koreanAlias = aliases.find((alias) => /[가-힣]/u.test(alias));
+  const mappedTitle = aliases.map((alias) => koreanTitleByAlias.get(normalizeTitle(alias))).find(Boolean);
+  const title = mappedTitle || koreanAlias || item.media.title.english || item.media.title.romaji || item.media.title.native || "제목 미상";
   return `${formatter.format(new Date(item.airingAt * 1000))} · ${title} ${item.episode}화`;
 });
 const message = lines.length
