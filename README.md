@@ -13,7 +13,17 @@ AniList 웹앱과 별도로, 라프텔의 한국어 요일 편성을 매일 휴�
 
 알림은 매일 한국 시간 오전 7시에 실행되며, 라프텔에서 그날 요일에 해당하는 작품의 한국어 제목과 당일 공개 회차 및 시각을 조회해 보냅니다. 라프텔에 회차 또는 공개 시각이 아직 등록되지 않았거나 조회에 실패한 작품은 `회차/시각 미정`으로 표시됩니다. 라프텔 편성에 없는 작품은 포함되지 않습니다. GitHub Actions 예약 실행은 혼잡 시 지연될 수 있습니다. 알림을 받으려면 ntfy 앱의 해당 주제 구독과 휴대폰 알림 권한을 유지해야 합니다.
 
+
+## 텔레그램 알림 추가 설정
+
+ntfy 알림과 함께 텔레그램으로도 보내려면 다음 설정이 필요합니다.
+
+1. 텔레그램에서 [@BotFather](https://t.me/BotFather)를 열고 `/newbot`으로 봇을 만든 뒤 봇 토큰을 받습니다.
+2. 새 봇과 대화를 열고 `/start`를 보냅니다.
+3. GitHub 저장소의 **Settings → Secrets and variables → Actions**에서 `TELEGRAM_BOT_TOKEN`(봇 토큰)과 `TELEGRAM_CHAT_ID`(채팅 ID)를 각각 새 Actions secret으로 저장합니다.
+4. Actions에서 **Daily Laftel anime notification → Run workflow**를 실행합니다.
+
+봇 토큰은 비밀번호처럼 취급하고 공개 저장소나 채팅에 올리지 마세요. 두 secret이 모두 등록되면 알림이 ntfy와 텔레그램 양쪽으로 발송됩니다.
 ## 사이트 배포
 
 저장소의 **Settings → Pages → Build and deployment → Source**를 **GitHub Actions**로 설정합니다. `main` 브랜치에 변경이 올라오면 Pages 배포 작업이 웹앱을 게시합니다.
-
