@@ -1,1 +1,19 @@
-# aniday
+# 애니데이
+
+AniList 공개 방영 일정으로 오늘의 애니 편성을 휴대폰 알림으로 받는 정적 웹앱입니다.
+
+## 휴대폰 알림 설정
+
+1. 휴대폰에 [ntfy](https://ntfy.sh/) 앱을 설치하고 알림 권한을 허용합니다.
+2. 앱에서 **구독 추가**를 눌러 저장소 비밀 설정 `NTFY_TOPIC`에 넣을 같은 주제명을 입력합니다.
+3. GitHub 저장소의 **Settings → Secrets and variables → Actions → New repository secret**에서 이름을 `NTFY_TOPIC`으로 하고, 같은 주제명을 값으로 저장합니다.
+4. GitHub 저장소의 **Actions** 탭에서 **Daily anime notification → Run workflow**를 실행해 알림이 도착하는지 확인합니다.
+
+주제명은 최소 16자 이상의 무작위 문자열로 정하세요. ntfy 주제는 누구나 구독할 수 있고 주소를 아는 사람은 메시지를 보낼 수 있으므로, 이름이나 생일처럼 추측 가능한 값은 사용하지 마세요. 주제명은 공개 저장소의 파일에 적지 마세요.
+
+알림은 매일 한국 시간 오전 7시에 실행되며, AniList에서 그날 공개 예정인 편성을 요약합니다. GitHub Actions 예약 실행은 혼잡 시 지연될 수 있고, AniList 편성 정보는 한국 OTT 공개 시각과 다를 수 있습니다. 알림을 받으려면 ntfy 앱의 해당 주제 구독과 휴대폰 알림 권한을 유지해야 합니다.
+
+## 사이트 배포
+
+저장소의 **Settings → Pages → Build and deployment → Source**를 **GitHub Actions**로 설정합니다. `main` 브랜치에 변경이 올라오면 Pages 배포 작업이 웹앱을 게시합니다.
+
