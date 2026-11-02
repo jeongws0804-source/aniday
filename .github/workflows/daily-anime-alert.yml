@@ -16,8 +16,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Send today's Laftel lineup to ntfy
+      - name: Send today's Laftel lineup to ntfy and Telegram
         run: node scripts/daily-anime-alert.mjs
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
