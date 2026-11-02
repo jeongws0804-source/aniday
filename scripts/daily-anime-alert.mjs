@@ -38,7 +38,8 @@ try {
     headers: { Accept: "application/json" },
   });
   if (!response.ok) throw new Error(`Laftel failed (${error.message}); Anissia returned HTTP ${response.status}`);
-  const rows = await response.json();
+  const payload = await response.json();
+  const rows = Array.isArray(payload) ? payload : payload.data;
   if (!Array.isArray(rows)) throw new Error("Unexpected Anissia schedule response");
   source = "Anissia";
   shows = [...new Map(
@@ -54,7 +55,8 @@ async function episodesForToday(show) {
       headers: { Accept: "application/json" },
     });
     if (!response.ok) throw new Error(`Anissia caption response HTTP ${response.status}`);
-    const captions = await response.json();
+    const payload = await response.json();
+    const captions = Array.isArray(payload) ? payload : payload.data;
     if (!Array.isArray(captions)) throw new Error("Unexpected Anissia caption response");
     return captions.filter((caption) => caption?.updDt?.slice(0, 10) === todayKst)
       .sort((a, b) => (a.updDt || "").localeCompare(b.updDt || ""))
@@ -134,3 +136,4 @@ if (telegramToken && telegramChatId) {
 } else {
   console.warn("Telegram secrets are not configured; skipped Telegram delivery.");
 }
+
