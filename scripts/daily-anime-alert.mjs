@@ -50,13 +50,13 @@ const message = lines.length
 
 const result = await fetch(`https://ntfy.sh/${topic}`, {
   method: "POST",
-  headers: {
-    "Content-Type": "text/plain; charset=utf-8",
-    Title: "애니데이 · 오늘의 공개 일정",
-    Tags: "tv,calendar",
-    Priority: "3",
-  },
-  body: message,
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    title: "애니데이 · 오늘의 공개 일정",
+    message,
+    tags: ["tv", "calendar"],
+    priority: 3,
+  }),
 });
 if (!result.ok) throw new Error(`ntfy returned HTTP ${result.status}`);
 console.log(`Sent today's schedule (${schedules.length} shows).`);
