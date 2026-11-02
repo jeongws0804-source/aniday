@@ -88,3 +88,19 @@ const result = await fetch(`https://ntfy.sh/${topic}`, {
 if (!result.ok) throw new Error(`ntfy returned HTTP ${result.status}`);
 console.log(`Sent Laftel ${weekdayKorean} lineup (${shows.length} shows).`);
 
+const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
+const telegramChatId = process.env.TELEGRAM_CHAT_ID;
+if (telegramToken && telegramChatId) {
+  const telegramResponse = await fetch(`https://api.telegram.org/bot${telegramToken}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: telegramChatId, text: message }),
+  });
+  const telegramResult = await telegramResponse.json();
+  if (!telegramResponse.ok || telegramResult.ok !== true) {
+    throw new Error(`Telegram returned HTTP ${telegramResponse.status}: ${telegramResult.description || "unknown error"}`);
+  }
+  console.log("Sent Laftel lineup to Telegram.");
+} else {
+  console.warn("Telegram secrets are not configured; skipped Telegram delivery.");
+}
