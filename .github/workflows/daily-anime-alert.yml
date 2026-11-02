@@ -1,0 +1,23 @@
+name: Daily anime notification
+
+on:
+  schedule:
+    - cron: "0 22 * * *" # 07:00 Korea Standard Time
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Send today's AniList schedule to ntfy
+        run: node scripts/daily-anime-alert.mjs
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+
