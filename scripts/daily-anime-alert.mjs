@@ -48,15 +48,16 @@ const message = lines.length
   ? `오늘 공개 예정 애니 ${lines.length}개\n\n${lines.join("\n")}`
   : "오늘 공개 예정인 AniList 애니 편성이 없습니다.";
 
+const encodedTitle = `=?UTF-8?B?${Buffer.from("애니데이 · 오늘의 공개 일정", "utf8").toString("base64")}?=`;
 const result = await fetch(`https://ntfy.sh/${topic}`, {
   method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    title: "애니데이 · 오늘의 공개 일정",
-    message,
-    tags: ["tv", "calendar"],
-    priority: 3,
-  }),
+  headers: {
+    "Content-Type": "text/plain; charset=utf-8",
+    "X-Title": encodedTitle,
+    "X-Tags": "tv,calendar",
+    "X-Priority": "3",
+  },
+  body: message,
 });
 if (!result.ok) throw new Error(`ntfy returned HTTP ${result.status}`);
 console.log(`Sent today's schedule (${schedules.length} shows).`);
