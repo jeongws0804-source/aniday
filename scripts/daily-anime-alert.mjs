@@ -15,23 +15,51 @@ const dateParts = new Intl.DateTimeFormat("en-CA", {
 const datePart = (type) => dateParts.find((part) => part.type === type)?.value || "00";
 const todayKst = `${datePart("year")}-${datePart("month")}-${datePart("day")}`;
 const laftelHeaders = { Accept: "application/json", laftel: "TeJava" };
+const anissiaWeekday = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[weekday];
 
-const response = await fetch("https://laftel.net/api/search/v2/daily", {
-  headers: { Accept: "application/json", laftel: "TeJava" },
-});
-if (!response.ok) throw new Error(`Laftel returned HTTP ${response.status}`);
-
-const payload = await response.json();
-const rows = Array.isArray(payload) ? payload : payload.results || payload.data || [];
-if (!Array.isArray(rows)) throw new Error("Unexpected Laftel daily schedule response");
-
-const shows = [...new Map(
-  rows
-    .filter((item) => item?.name && item.distributed_air_time === weekdayKorean && item.is_expired !== true)
-    .map((item) => [item.id, item]),
-).values()].sort((a, b) => a.name.localeCompare(b.name, "ko"));
+let source = "Laftel";
+let shows;
+let laftelError;
+try {
+  const response = await fetch("https://laftel.net/api/search/v2/daily", { headers: laftelHeaders });
+  if (!response.ok) throw new Error(`Laftel returned HTTP ${response.status}`);
+  const payload = await response.json();
+  const rows = Array.isArray(payload) ? payload : payload.results || payload.data || [];
+  if (!Array.isArray(rows)) throw new Error("Unexpected Laftel daily schedule response");
+  shows = [...new Map(
+    rows
+      .filter((item) => item?.name && item.distributed_air_time === weekdayKorean && item.is_expired !== true)
+      .map((item) => [item.id, { source: "Laftel", id: item.id, name: item.name, time: item.latest_published_datetime?.split("T")[1]?.slice(0, 5) }]),
+  ).values()];
+} catch (error) {
+  laftelError = error;
+  console.warn("Laftel schedule unavailable; falling back to Anissia:", error.message);
+  const response = await fetch(`https://api.anissia.net/anime/schedule/${anissiaWeekday}`, {
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) throw new Error(`Laftel failed (${error.message}); Anissia returned HTTP ${response.status}`);
+  const rows = await response.json();
+  if (!Array.isArray(rows)) throw new Error("Unexpected Anissia schedule response");
+  source = "Anissia";
+  shows = [...new Map(
+    rows.filter((item) => item?.subject && item.status === "ON")
+      .map((item) => [item.animeNo, { source, id: item.animeNo, name: item.subject, time: item.time }]),
+  ).values()];
+}
+shows.sort((a, b) => a.name.localeCompare(b.name, "ko"));
 
 async function episodesForToday(show) {
+  if (show.source === "Anissia") {
+    const response = await fetch(`https://api.anissia.net/anime/caption/animeNo/${encodeURIComponent(show.id)}`, {
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) throw new Error(`Anissia caption response HTTP ${response.status}`);
+    const captions = await response.json();
+    if (!Array.isArray(captions)) throw new Error("Unexpected Anissia caption response");
+    return captions.filter((caption) => caption?.updDt?.slice(0, 10) === todayKst)
+      .sort((a, b) => (a.updDt || "").localeCompare(b.updDt || ""))
+      .map((caption) => ({ episode_num: caption.episode, published_datetime: caption.updDt?.replace(" ", "T") }));
+  }
   let next = `https://laftel.net/api/episodes/v2/list?item_id=${encodeURIComponent(show.id)}`;
   const episodes = [];
   for (let page = 0; next && page < 10; page += 1) {
@@ -56,22 +84,24 @@ for (let index = 0; index < shows.length; index += 4) {
       if (episodes.length) {
         return episodes.map((episode) => {
           const rawNumber = String(episode.episode_num || "").trim();
-          const episodeLabel = /^\d+(?:\.\d+)?$/.test(rawNumber) ? `${rawNumber}화` : rawNumber;
-          const time = episode.published_datetime?.split("T")[1]?.slice(0, 5);
-          return `${time ? `${time} · ` : ""}${show.name}${episodeLabel ? ` ${episodeLabel}` : ""}`;
+          const episodeLabel = /^\d+(?:\.\d+)?$/.test(rawNumber) ? `${rawNumber}화` : (rawNumber === "0" ? "단편" : rawNumber);
+          const time = show.source === "Anissia" ? show.time : episode.published_datetime?.split("T")[1]?.slice(0, 5);
+          const captionNote = show.source === "Anissia" ? " (자막 등록 기준)" : "";
+          return `${time ? `${time} · ` : ""}${show.name}${episodeLabel ? ` ${episodeLabel}` : ""}${captionNote}`;
         });
       }
+      if (show.source === "Anissia") return [`${show.time || "시간 미정"} · ${show.name} · 회차 미정`];
     } catch (error) {
-      console.warn(`Laftel episode lookup failed (${show.id}):`, error.message);
+      console.warn(`${show.source} episode lookup failed (${show.id}):`, error.message);
     }
-    return [`${show.name} · 회차/시각 미정`];
+    return [`${show.time ? `${show.time} · ` : ""}${show.name} · 회차/시각 미정`];
   }));
   showLines.push(...batch.flat());
 }
 
 const message = shows.length
-  ? `오늘 라프텔 ${weekdayKorean} 편성 ${shows.length}개\n\n${showLines.join("\n")}`
-  : `오늘(${weekdayKorean}) 라프텔 편성 정보가 없습니다.`;
+  ? `오늘 ${source} ${weekdayKorean} 편성 ${shows.length}개${laftelError ? " (라프텔 연결 대체 조회)" : ""}\n\n${showLines.join("\n")}`
+  : `오늘(${weekdayKorean}) ${source} 편성 정보가 없습니다.`;
 
 const encodedTitle = `=?UTF-8?B?${Buffer.from("애니데이 · 라프텔 오늘 편성", "utf8").toString("base64")}?=`;
 const result = await fetch(`https://ntfy.sh/${topic}`, {
