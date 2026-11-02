@@ -44,7 +44,7 @@ main{padding:22px 16px 0}.section-head{display:flex;align-items:center;justify-c
   <div class="feature-bottom"><span class="date-pill" id="todayPill">오늘</span><button class="outline-btn" id="addFeature">＋ 일정 추가</button></div>
  </section>
  <div class="list" id="animeList"></div>
- <div class="notice">※ 기본 목록은 앱 기능을 보여주기 위한 예시 일정입니다. ‘AniList 일정 불러오기’를 누르면 앞으로 14일간의 예정 에피소드와 포스터를 자동으로 가져옵니다. 일정 출처: AniList 공개 API. 국제 방영 일정은 한국 OTT 공개일과 다를 수 있습니다. 알림은 이 앱이 열려 있는 동안의 기능이 아니라 기기 알림 권한과 별도 서비스 구성이 필요한 기능입니다.</div>
+ <div class="notice">※ ‘AniList 일정 불러오기’를 누르면 앞으로 14일간의 예정 에피소드와 포스터를 가져오고, 애니시아에 등록된 한국어 제목이 있으면 우선 표시합니다. 한국어 제목 매칭이 없는 작품은 원래 제목으로 표시됩니다. 국제 방영 일정은 한국 OTT 공개일과 다를 수 있습니다. 휴대폰 푸시 알림은 별도 서비스로 설정해야 합니다.</div>
 </main>
 <nav class="bottomnav">
  <button class="navbtn active" data-tab="all"><b>⌂</b>홈</button>
@@ -133,7 +133,7 @@ main{padding:22px 16px 0}.section-head{display:flex;align-items:center;justify-c
   if(edit){const x=items.find(x=>x.id===edit.dataset.edit);if(x)openModal(x)}
   if(del){const x=items.find(x=>x.id===del.dataset.delete);if(x&&confirm('「'+x.title+'」 일정을 삭제할까요?')){items=items.filter(y=>y.id!==x.id);save();render();toast('일정을 삭제했어요.')}}
  });
- $('settingsBtn').addEventListener('click',()=>alert('애니데이 설정\n\n직접 등록한 일정은 이 기기의 브라우저에 저장됩니다.\n실시간 일정은 AniList 공개 API를 사용합니다. 한국 OTT 공개일과 다를 수 있습니다.\n푸시 알림은 별도 서버 설정이 필요합니다.'));
+ $('settingsBtn').addEventListener('click',()=>alert('애니데이 설정\n\n직접 등록한 일정은 이 기기의 브라우저에 저장됩니다.\n방영 일정과 회차는 AniList에서 가져오고, 한국어 제목은 애니시아에서 일치하는 작품을 찾아 표시합니다. 한국 OTT 공개일과 다를 수 있습니다.\n푸시 알림은 별도 서비스로 설정되어 있습니다.'));
  $('liveBtn').addEventListener('click',loadLiveSchedule);
  function seoulDateTime(timestamp){
   const d=new Date(timestamp*1000);
@@ -143,8 +143,25 @@ main{padding:22px 16px 0}.section-head{display:flex;align-items:center;justify-c
   const time=new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',hour:'2-digit',minute:'2-digit',hour12:false}).format(d);
   return {date,time};
  }
+ function normalizeTitle(value){return String(value||'').normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu,'')}
+ async function loadKoreanTitleMap(){
+  const schedules=await Promise.all(Array.from({length:7},(_,week)=>fetch(`https://api.anissia.net/anime/schedule/${week}`,{headers:{Accept:'application/json'}}).then(async response=>{
+   if(!response.ok)throw new Error(`애니시아 제목 목록 오류 (${response.status})`);
+   const payload=await response.json();const rows=Array.isArray(payload)?payload:payload.data;
+   if(!Array.isArray(rows))throw new Error('애니시아 제목 목록 형식 오류');
+   return rows;
+  })));
+  const map=new Map();
+  schedules.flat().forEach(item=>{
+   if(!item?.subject) return;
+   [item.originalSubject,item.subject].filter(Boolean).forEach(alias=>{
+    const key=normalizeTitle(alias);if(key&&!map.has(key))map.set(key,item.subject);
+   });
+  });
+  return map;
+ }
  async function loadLiveSchedule(){
-  const btn=$('liveBtn'),status=$('liveStatus');btn.disabled=true;btn.textContent='불러오는 중…';status.textContent='AniList에서 향후 14일간의 방영 예정 정보를 가져오고 있어요.';
+  const btn=$('liveBtn'),status=$('liveStatus');btn.disabled=true;btn.textContent='불러오는 중…';status.textContent='방영 일정과 애니시아 한국어 제목을 가져오고 있어요.';
   const queryText=`query ($page: Int, $now: Int, $until: Int) {
     Page(page: $page, perPage: 50) {
       pageInfo { hasNextPage }
@@ -163,13 +180,17 @@ main{padding:22px 16px 0}.section-head{display:flex;align-items:center;justify-c
     const result=payload.data?.Page;if(!result)throw new Error('API 데이터 형식이 예상과 달라요.');
     all.push(...(result.airingSchedules||[]));if(!result.pageInfo?.hasNextPage)break;
    }
-   const seen=new Set();
+   let koreanTitleMap=new Map();
+   try{koreanTitleMap=await loadKoreanTitleMap()}catch(titleError){console.warn('Anissia Korean titles unavailable:',titleError);}
+   const seen=new Set();let koreanTitleCount=0;
    liveItems=all.filter(s=>s.media&&!seen.has(s.id)&&(seen.add(s.id),true)).map(s=>{
     const dt=seoulDateTime(s.airingAt),m=s.media;
-    return {id:'live-'+s.id,title:m.title?.english||m.title?.romaji||m.title?.native||'제목 미상',date:dt.date,time:dt.time,platform:'AniList · '+(m.format||'ANIME'),status:'confirmed',note:`예정 ${s.episode}화`,custom:false,fav:liveFavs.has(String(s.id)),emoji:'✦',cover:m.coverImage?.large||'',url:m.siteUrl||''};
+    const koreanTitle=[m.title?.native,m.title?.romaji,m.title?.english].map(normalizeTitle).map(key=>koreanTitleMap.get(key)).find(Boolean);
+    if(koreanTitle)koreanTitleCount++;
+    return {id:'live-'+s.id,title:koreanTitle||m.title?.english||m.title?.romaji||m.title?.native||'제목 미상',date:dt.date,time:dt.time,platform:'AniList · '+(m.format||'ANIME'),status:'confirmed',note:`예정 ${s.episode}화`,custom:false,fav:liveFavs.has(String(s.id)),emoji:'✦',cover:m.coverImage?.large||'',url:m.siteUrl||''};
    });
    liveItems.sort((a,b)=>(a.date+' '+a.time).localeCompare(b.date+' '+b.time));
-   status.textContent=liveItems.length?`AniList에서 ${liveItems.length}개 에피소드 일정을 불러왔어요. 날짜와 시간은 한국 시간 기준이며, 한국 OTT 공개일과 다를 수 있어요.`:'앞으로 14일 안에 등록된 방영 일정이 없어요.';
+   status.textContent=liveItems.length?`${liveItems.length}개 일정 중 ${koreanTitleCount}개 제목을 한국어로 표시했어요. 날짜와 시간은 한국 시간 기준이며, 한국 OTT 공개일과 다를 수 있어요.`:'앞으로 14일 안에 등록된 방영 일정이 없어요.';
    filter='all';setFilterButtons();render();if(!liveItems.length)toast('가져올 방영 일정이 없어요.');
   }catch(err){
    console.error('AniList schedule error:',err);
