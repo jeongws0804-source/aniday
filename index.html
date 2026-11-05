@@ -177,11 +177,9 @@ main{padding:22px 16px 0}.section-head{display:flex;align-items:center;justify-c
   const data=await response.json(),rows=Array.isArray(data.results)?data.results:[];laftelTitleCache.set(key,rows);return rows;
  }
  async function koreanLaftelTitle(aliases){
-  for(const alias of [...new Set(aliases.filter(Boolean))].slice(0,5)){
-   const rows=await searchLaftelTitles(alias),key=normalizeTitle(alias),clean=name=>String(name||'').replace(/^\((?:자막|더빙|무삭제)\)\s*/u,'').trim();
-   const exact=rows.find(row=>/[가-힣]/.test(row.name||'')&&normalizeTitle(clean(row.name))===key);
-   if(exact)return clean(exact.name);
-  }
+  const candidates=[...new Set(aliases.filter(Boolean))].slice(0,3),results=await Promise.all(candidates.map(async alias=>{try{return await searchLaftelTitles(alias)}catch(e){return []}}));
+  const clean=name=>String(name||'').replace(/^\((?:자막|더빙|무삭제)\)\s*/u,'').trim();
+  for(let i=0;i<candidates.length;i++){const key=normalizeTitle(candidates[i]),exact=results[i].find(row=>/[가-힣]/.test(row.name||'')&&normalizeTitle(clean(row.name))===key);if(exact)return clean(exact.name)}
   return '';
  }
  async function koreanRouletteTitle(media){
@@ -233,6 +231,8 @@ main{padding:22px 16px 0}.section-head{display:flex;align-items:center;justify-c
  }
  function normalizeTitle(value){return String(value||'').normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu,'')}
  async function loadKoreanTitleMap(){
+  const cacheKey='aniday-korean-title-map-v1';
+  try{const cached=JSON.parse(localStorage.getItem(cacheKey)||'null');if(cached?.savedAt&&Date.now()-cached.savedAt<6*60*60*1000&&Array.isArray(cached.aliases)&&Array.isArray(cached.hosts)){const map=new Map(cached.aliases);map.ohliTitlesByHost=new Map(cached.hosts);return map}}catch(e){}
   const [anissiaSchedules,ohliRows]=await Promise.all([
    Promise.all(Array.from({length:9},(_,week)=>fetch(`https://api.anissia.net/anime/schedule/${week}`,{headers:{Accept:'application/json'}}).then(async response=>{
     if(!response.ok)throw new Error(`애니시아 제목 목록 오류 (${response.status})`);
@@ -263,51 +263,55 @@ main{padding:22px 16px 0}.section-head{display:flex;align-items:center;justify-c
   });
   const map=new Map([...aliasesByKey].filter(([,subjects])=>subjects.size===1).map(([key,subjects])=>[key,[...subjects][0]]));
   map.ohliTitlesByHost=new Map([...ohliTitlesByHost].filter(([,subjects])=>subjects.size===1).map(([host,subjects])=>[host,[...subjects][0]]));
+  try{localStorage.setItem(cacheKey,JSON.stringify({savedAt:Date.now(),aliases:[...map],hosts:[...map.ohliTitlesByHost]}))}catch(e){}
   return map;
  }
  async function loadWikidataKoreanTitles(mediaIds){
-  const ids=[...new Set(mediaIds.map(String))];if(!ids.length)return new Map();
-  const values=ids.map(id=>`"${id.replace(/[^0-9]/g,'')}"`).filter(id=>id!=="\"\"").join(' ');
-  if(!values)return new Map();
+  const ids=[...new Set(mediaIds.map(String))],map=new Map(),now=Date.now(),missing=[];if(!ids.length)return map;
+  ids.forEach(id=>{const cached=titleTranslationCache[id];if(cached?.wikidataCheckedAt&&now-cached.wikidataCheckedAt<30*24*60*60*1000){if(cached.wikidataTitle)map.set(id,cached.wikidataTitle)}else missing.push(id)});
+  if(!missing.length)return map;
+  const values=missing.map(id=>`"${id.replace(/[^0-9]/g,'')}"`).filter(id=>id!=="\"\"").join(' ');
+  if(!values)return map;
   const query=`SELECT ?anilist ?title WHERE { VALUES ?anilist { ${values} } ?item wdt:P8729 ?anilist. OPTIONAL { ?item rdfs:label ?label. FILTER(LANG(?label)="ko") } OPTIONAL { ?item skos:altLabel ?alias. FILTER(LANG(?alias)="ko") } OPTIONAL { ?page schema:about ?item; schema:isPartOf <https://ko.wikipedia.org/>; schema:name ?wikiTitle. } BIND(COALESCE(?label, ?wikiTitle, ?alias) AS ?title) FILTER(BOUND(?title)) }`;
-  const response=await fetch(`https://query.wikidata.org/sparql?query=${encodeURIComponent(query)}&format=json`,{headers:{Accept:'application/sparql-results+json'}});
+  const response=await fetch(`https://query.wikidata.org/sparql?query=${encodeURIComponent(query)}&format=json`,{headers:{Accept:'application/sparql-results+json'},signal:AbortSignal.timeout(5000)});
   if(!response.ok)throw new Error(`Wikidata 제목 조회 오류 (${response.status})`);
-  const payload=await response.json(),map=new Map();
-  (payload.results?.bindings||[]).forEach(row=>{const id=row.anilist?.value,title=row.title?.value;if(id&&title&&/[가-힣]/.test(title)&&!map.has(id))map.set(id,title)});
+  const payload=await response.json(),found=new Map();
+  (payload.results?.bindings||[]).forEach(row=>{const id=row.anilist?.value,title=row.title?.value;if(id&&title&&/[가-힣]/.test(title)&&!found.has(id))found.set(id,title)});
+  missing.forEach(id=>{const title=found.get(id)||'';titleTranslationCache[id]={...(titleTranslationCache[id]||{}),wikidataTitle:title,wikidataCheckedAt:Date.now()};if(title)map.set(id,title)});
+  try{localStorage.setItem(titleTranslationCacheKey,JSON.stringify(titleTranslationCache))}catch(e){}
   return map;
  }
  async function findKoreanWikipediaAnimeTitle(media){
-  const candidates=[media.title?.english,media.title?.native,media.title?.romaji].filter((title,index,all)=>title&&!/[가-힣]/.test(title)&&all.indexOf(title)===index);
-  for(const sourceTitle of candidates){
+  const candidates=[media.title?.english,media.title?.native,media.title?.romaji].filter((title,index,all)=>title&&!/[가-힣]/.test(title)&&all.indexOf(title)===index).slice(0,2);
+  const lookups=await Promise.all(candidates.map(async sourceTitle=>{
    try{
     const params=new URLSearchParams({action:'query',generator:'search',gsrsearch:`"${sourceTitle}"`,gsrnamespace:'0',gsrlimit:'5',prop:'categories|pageprops',cllimit:'30',clshow:'!hidden',format:'json',origin:'*'});
-    const response=await fetch(`https://ko.wikipedia.org/w/api.php?${params}`,{signal:AbortSignal.timeout(7000)});if(!response.ok)continue;
+    const response=await fetch(`https://ko.wikipedia.org/w/api.php?${params}`,{signal:AbortSignal.timeout(3500)});if(!response.ok)return '';
     const payload=await response.json(),pages=Object.values(payload.query?.pages||{});
     const animePage=pages.find(page=>{
      if(page.pageprops?.disambiguation)return false;
      const categories=(page.categories||[]).map(category=>category.title.replace(/^분류:/,''));
      return categories.some(category=>/(애니메이션|애니메이션 영화|텔레비전 애니메이션|일본의 애니메이션|일본 애니메이션|만화 영화|OVA|오리지널 비디오 애니메이션|극장판 애니메이션|애니메이션 작품)/i.test(category));
     });
-    if(animePage?.title&&/[가-힣]/.test(animePage.title))return animePage.title;
-   }catch(error){console.warn('Korean Wikipedia title lookup unavailable:',error)}
-  }
-  return '';
+    return animePage?.title&&/[가-힣]/.test(animePage.title)?animePage.title:'';
+   }catch(error){console.warn('Korean Wikipedia title lookup unavailable:',error);return ''}
+  }));
+  return lookups.find(Boolean)||'';
  }
  const titleTranslationCacheKey='aniday-title-translations-v2';
  let titleTranslationCache={};try{titleTranslationCache=JSON.parse(localStorage.getItem(titleTranslationCacheKey)||'{}')}catch(e){}
  async function translateAnimeTitle(media){
   const cached=titleTranslationCache[media.id];if(cached?.title&&Date.now()-cached.savedAt<180*24*60*60*1000)return cached.title;
-  const native=media.title?.native||'',candidates=[/[\u3040-\u30ff\u3400-\u9fff]/u.test(native)?native:'',media.title?.english,media.title?.romaji,native].filter((title,index,all)=>title&&!/[가-힣]/.test(title)&&all.indexOf(title)===index);
-  for(const original of candidates){
+  const native=media.title?.native||'',candidates=[/[\u3040-\u30ff\u3400-\u9fff]/u.test(native)?native:'',media.title?.english,media.title?.romaji,native].filter((title,index,all)=>title&&!/[가-힣]/.test(title)&&all.indexOf(title)===index).slice(0,2);
+  const translations=await Promise.all(candidates.map(async original=>{
    try{
     const params=new URLSearchParams({client:'gtx',sl:'auto',tl:'ko',dt:'t',q:original});
-    const response=await fetch(`https://translate.googleapis.com/translate_a/single?${params}`);if(!response.ok)continue;
+    const response=await fetch(`https://translate.googleapis.com/translate_a/single?${params}`,{signal:AbortSignal.timeout(4000)});if(!response.ok)return '';
     const payload=await response.json(),title=(payload?.[0]||[]).map(part=>part?.[0]||'').join('').trim();
-    if(!title||!/[가-힣]/.test(title))continue;
-    titleTranslationCache[media.id]={title,savedAt:Date.now()};return title;
-   }catch(error){console.warn('Automatic Korean title translation unavailable:',error)}
-  }
-  return '';
+    return title&&/[가-힣]/.test(title)?title:'';
+   }catch(error){console.warn('Automatic Korean title translation unavailable:',error);return ''}
+  }));
+  const title=translations.find(Boolean)||'';if(title)titleTranslationCache[media.id]={title,savedAt:Date.now()};return title;
  }
  async function loadLiveSchedule(){
   const btn=$('liveBtn'),status=$('liveStatus');btn.disabled=true;btn.textContent='불러오는 중…';status.textContent='방영 일정과 한국어 제목을 가져오고 있어요.';
@@ -330,38 +334,45 @@ main{padding:22px 16px 0}.section-head{display:flex;align-items:center;justify-c
     all.push(...(result.airingSchedules||[]));if(!result.pageInfo?.hasNextPage)break;
    }
    let koreanTitleMap=new Map(),wikidataTitleMap=new Map();
-   try{koreanTitleMap=await loadKoreanTitleMap()}catch(titleError){console.warn('Anissia Korean titles unavailable:',titleError);}
    const mediaById=new Map();all.forEach(s=>{if(s.media)mediaById.set(String(s.media.id),s.media)});
    const initialSeen=new Set();
    liveItems=all.filter(s=>s.media&&!initialSeen.has(s.id)&&(initialSeen.add(s.id),true)).map(s=>{const dt=seoulDateTime(s.airingAt),m=s.media,mediaId=String(m.id);return {id:'live-'+s.id,mediaId,title:m.title?.english||m.title?.romaji||m.title?.native||'제목 미상',date:dt.date,time:dt.time,platform:'AniList · '+(m.format||'ANIME'),status:'confirmed',note:`예정 ${s.episode}화`,custom:false,fav:liveFavs.has(mediaId),emoji:'✦',cover:m.coverImage?.large||'',url:m.siteUrl||''}});
    status.textContent='일정을 표시했어요. 한국어 제목을 확인하고 있습니다.';filter='all';setFilterButtons();render();
-   try{wikidataTitleMap=await loadWikidataKoreanTitles([...mediaById.keys()])}catch(titleError){console.warn('Wikidata Korean titles unavailable:',titleError);}
-   const laftelTitleByMedia=new Map(),needsLaftel=[...mediaById.values()].filter(m=>{
+   const laftelTitleByMedia=new Map(),wikipediaTitleByMedia=new Map(),translationByMedia=new Map();
+   [...mediaById.keys()].forEach(id=>{const cached=titleTranslationCache[id];if(cached?.laftelCheckedAt&&Date.now()-cached.laftelCheckedAt<24*60*60*1000&&cached.laftelTitle)laftelTitleByMedia.set(id,cached.laftelTitle)});
+   const findVerifiedTitle=m=>{const id=String(m.id);return (m.synonyms||[]).find(title=>/[가-힣]/.test(title))||[m.title?.native,m.title?.english,m.title?.romaji].find(title=>/[가-힣]/.test(title||''))||[m.title?.native,m.title?.romaji,m.title?.english,...(m.synonyms||[])].map(normalizeTitle).map(key=>koreanTitleMap.get(key)).find(Boolean)||((m.externalLinks||[]).map(link=>{try{return koreanTitleMap.ohliTitlesByHost?.get(new URL(link.url).hostname.toLowerCase().replace(/^www\./,''))}catch(e){return ''}}).find(Boolean))||wikidataTitleMap.get(id)||laftelTitleByMedia.get(id)};
+   const applyResolvedTitles=()=>{liveItems=liveItems.map(item=>{const m=mediaById.get(String(item.mediaId));if(!m)return item;const id=String(m.id),verifiedTitle=findVerifiedTitle(m),wikiTitle=wikipediaTitleByMedia.get(id),translatedTitle=translationByMedia.get(id),title=verifiedTitle||wikiTitle||translatedTitle;if(!title)return item;const baseNote=item.note.split(' · ')[0],comparisonTitle=m.title?.english||m.title?.romaji||m.title?.native||'';return {...item,title,note:`${baseNote}${!verifiedTitle&&wikiTitle===title?' · 위키백과 문서 제목':!verifiedTitle?' · 제목 자동 번역':''}`,namuUrl:!verifiedTitle&&comparisonTitle?`https://namu.wiki/Go?q=${encodeURIComponent(comparisonTitle)}`:''}});render()};
+   const titleMapPromise=loadKoreanTitleMap().then(map=>{koreanTitleMap=map;applyResolvedTitles();return map}).catch(error=>{console.warn('Anissia Korean titles unavailable:',error);return new Map()});
+   const wikidataPromise=loadWikidataKoreanTitles([...mediaById.keys()]).then(map=>{wikidataTitleMap=map;applyResolvedTitles();return map}).catch(error=>{console.warn('Wikidata Korean titles unavailable:',error);return new Map()});
+   await Promise.all([titleMapPromise,wikidataPromise]);
+   applyResolvedTitles();
+   const needsLaftel=[...mediaById.values()].filter(m=>{
+    const cached=titleTranslationCache[String(m.id)];if(cached?.laftelCheckedAt&&Date.now()-cached.laftelCheckedAt<24*60*60*1000)return false;
     if((m.synonyms||[]).some(title=>/[가-힣]/.test(title))||[m.title?.native,m.title?.english,m.title?.romaji].some(title=>/[가-힣]/.test(title||'')))return false;
     const ohliHostMatch=(m.externalLinks||[]).some(link=>{try{return koreanTitleMap.ohliTitlesByHost?.has(new URL(link.url).hostname.toLowerCase().replace(/^www\./,''))}catch(e){return false}});
     return !ohliHostMatch&&![m.title?.native,m.title?.romaji,m.title?.english,...(m.synonyms||[])].map(normalizeTitle).some(key=>koreanTitleMap.has(key));
    });
-   for(let i=0;i<needsLaftel.length;i+=8){
-    const batch=needsLaftel.slice(i,i+8);
+   for(let i=0;i<needsLaftel.length;i+=16){
+    const batch=needsLaftel.slice(i,i+16);
     const found=await Promise.all(batch.map(async m=>{
      try{return [String(m.id),await koreanLaftelTitle([m.title?.english,m.title?.romaji,m.title?.native,...(m.synonyms||[])])]}catch(error){console.warn('Laftel schedule title lookup unavailable:',error);return [String(m.id),'']}
     }));
-    found.forEach(([id,title])=>{if(title)laftelTitleByMedia.set(id,title)});
+    found.forEach(([id,title])=>{titleTranslationCache[id]={...(titleTranslationCache[id]||{}),laftelTitle:title,laftelCheckedAt:Date.now()};if(title)laftelTitleByMedia.set(id,title)});try{localStorage.setItem(titleTranslationCacheKey,JSON.stringify(titleTranslationCache))}catch(e){}applyResolvedTitles();
    }
-   const wikipediaTitleByMedia=new Map(),translationByMedia=new Map(),needsTranslation=[...mediaById.values()].filter(m=>{
+   const needsTranslation=[...mediaById.values()].filter(m=>{
     if((m.synonyms||[]).some(title=>/[가-힣]/.test(title))||[m.title?.native,m.title?.english,m.title?.romaji].some(title=>/[가-힣]/.test(title||'')))return false;
     return ![m.title?.native,m.title?.romaji,m.title?.english,...(m.synonyms||[])].map(normalizeTitle).some(key=>koreanTitleMap.has(key))&&!wikidataTitleMap.has(String(m.id))&&!laftelTitleByMedia.has(String(m.id))&&!((m.externalLinks||[]).some(link=>{try{return koreanTitleMap.ohliTitlesByHost?.has(new URL(link.url).hostname.toLowerCase().replace(/^www\./,''))}catch(e){return false}}));
    });
-   const needsWikipedia=needsTranslation.filter(m=>!titleTranslationCache[String(m.id)]?.wikipediaCheckedAt||Date.now()-titleTranslationCache[String(m.id)].wikipediaCheckedAt>30*24*60*60*1000);
-   for(let i=0;i<needsWikipedia.length;i+=5){
-    const found=await Promise.all(needsWikipedia.slice(i,i+5).map(async m=>[String(m.id),await findKoreanWikipediaAnimeTitle(m)]));
-    found.forEach(([id,title])=>{titleTranslationCache[id]={...(titleTranslationCache[id]||{}),wikipediaTitle:title,wikipediaCheckedAt:Date.now()};if(title)wikipediaTitleByMedia.set(id,title)});
-   }
-   Object.entries(titleTranslationCache).forEach(([id,cached])=>{if(cached?.wikipediaTitle&&mediaById.has(id))wikipediaTitleByMedia.set(id,cached.wikipediaTitle)});
-   for(let i=0;i<needsTranslation.length;i+=8){
-    const needsFallback=needsTranslation.slice(i,i+8).filter(m=>!wikipediaTitleByMedia.has(String(m.id)));
-    const found=await Promise.all(needsFallback.map(async m=>[String(m.id),await translateAnimeTitle(m)]));
-    found.forEach(([id,title])=>{if(title)translationByMedia.set(id,title)});
+   for(let i=0;i<needsTranslation.length;i+=12){
+    const batch=needsTranslation.slice(i,i+12);
+    const found=await Promise.all(batch.map(async m=>{
+     const id=String(m.id),cached=titleTranslationCache[id],wikiFresh=cached?.wikipediaCheckedAt&&Date.now()-cached.wikipediaCheckedAt<30*24*60*60*1000;
+     const [wikiTitle,translatedTitle]=await Promise.all([wikiFresh?Promise.resolve(cached.wikipediaTitle||''):findKoreanWikipediaAnimeTitle(m),translateAnimeTitle(m)]);
+     if(!wikiFresh)titleTranslationCache[id]={...(titleTranslationCache[id]||{}),wikipediaTitle:wikiTitle,wikipediaCheckedAt:Date.now()};
+     return [id,wikiTitle,translatedTitle];
+    }));
+    found.forEach(([id,wikiTitle,translatedTitle])=>{if(wikiTitle)wikipediaTitleByMedia.set(id,wikiTitle);if(translatedTitle)translationByMedia.set(id,translatedTitle)});
+    try{localStorage.setItem(titleTranslationCacheKey,JSON.stringify(titleTranslationCache))}catch(e){}applyResolvedTitles();
    }
    try{localStorage.setItem(titleTranslationCacheKey,JSON.stringify(titleTranslationCache))}catch(e){}
    const seen=new Set(),countedTitleIds=new Set();let verifiedTitleCount=0,translatedTitleCount=0,legacyFavsMigrated=false;
